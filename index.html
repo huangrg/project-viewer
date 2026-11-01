@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f97316">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="项目管家">
+  <meta name="description" content="签约项目跟进与业绩统计">
+  <title>项目管家</title>
+  <link rel="manifest" href="manifest.json">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <link rel="icon" type="image/png" href="icons/icon-192.png">
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem('projectViewer.theme') || 'system';
+        var dark = t === 'dark' || (t === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+        document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+      } catch (e) {}
+    })();
+  </script>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="app-header">
+    <h1>项目管家</h1>
+    <div class="header-actions">
+      <button id="btnTheme" class="icon-btn" type="button" aria-label="切换主题" title="切换主题"></button>
+      <button id="btnData" class="icon-btn" type="button" aria-label="数据备份" title="数据备份">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <ellipse cx="12" cy="5.5" rx="7.5" ry="3"></ellipse>
+          <path d="M4.5 5.5v6c0 1.66 3.36 3 7.5 3s7.5-1.34 7.5-3v-6"></path>
+          <path d="M4.5 11.5v6c0 1.66 3.36 3 7.5 3s7.5-1.34 7.5-3v-6"></path>
+        </svg>
+      </button>
+    </div>
+  </header>
+
+  <main id="app">
+    <section id="viewPending" class="view active">
+      <div class="search-bar">
+        <input id="searchPending" type="search" aria-label="搜索待签约项目" placeholder="搜索项目名称、客户、备注" autocomplete="off">
+      </div>
+      <div id="listPending" class="list"></div>
+    </section>
+
+    <section id="viewAll" class="view">
+      <div class="search-bar">
+        <input id="searchAll" type="search" aria-label="搜索全部项目" placeholder="搜索项目名称、客户、备注" autocomplete="off">
+      </div>
+      <div class="chips" id="statusChips">
+        <button class="chip active" type="button" data-status="all" aria-pressed="true">全部</button>
+        <button class="chip" type="button" data-status="pending" aria-pressed="false">待签约</button>
+        <button class="chip" type="button" data-status="signed" aria-pressed="false">已签约</button>
+        <button class="chip" type="button" data-status="rejected" aria-pressed="false">不签约</button>
+      </div>
+      <div id="listAll" class="list"></div>
+    </section>
+
+    <section id="viewStats" class="view">
+      <div class="month-nav">
+        <button class="icon-btn" type="button" data-action="prev-month" aria-label="上个月">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"></path></svg>
+        </button>
+        <div class="month-label" id="monthLabel"></div>
+        <button class="icon-btn" type="button" data-action="next-month" aria-label="下个月">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 5l7 7-7 7"></path></svg>
+        </button>
+      </div>
+
+      <div class="stat-cards" id="statCards"></div>
+
+      <section class="card chart-card">
+        <div class="card-title-row">
+          <h3>近 12 个月趋势</h3>
+          <span class="muted small">金额 / 佣金</span>
+        </div>
+        <div id="trendChart" class="trend-chart"></div>
+      </section>
+
+      <section class="card">
+        <div class="card-title-row">
+          <h3>当月签约明细</h3>
+          <span class="muted small" id="monthListCount"></span>
+        </div>
+        <div id="monthList"></div>
+      </section>
+
+      <section class="card" id="yearTotalCard"></section>
+
+      <section class="card">
+        <div class="card-title-row">
+          <h3 id="yearTableTitle">年度汇总</h3>
+          <span class="muted small">点击月份查看</span>
+        </div>
+        <div class="table-wrap">
+          <table class="year-table" id="yearTable"></table>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <nav class="tabbar" id="tabbar">
+    <button type="button" class="tab active" data-view="pending" aria-current="page">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M9 4h6a1 1 0 0 1 1 1v1H8V5a1 1 0 0 1 1-1z"></path>
+        <path d="M8 5H6.5A1.5 1.5 0 0 0 5 6.5v13A1.5 1.5 0 0 0 6.5 21h11a1.5 1.5 0 0 0 1.5-1.5v-13A1.5 1.5 0 0 0 17.5 5H16"></path>
+        <path d="M8.5 11h7M8.5 15h4.5"></path>
+      </svg>
+      <span>待签约</span>
+    </button>
+    <button type="button" class="tab" data-view="all">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <rect x="4" y="4" width="7" height="7" rx="1.5"></rect>
+        <rect x="13" y="4" width="7" height="7" rx="1.5"></rect>
+        <rect x="4" y="13" width="7" height="7" rx="1.5"></rect>
+        <rect x="13" y="13" width="7" height="7" rx="1.5"></rect>
+      </svg>
+      <span>全部项目</span>
+    </button>
+    <button type="button" class="tab" data-view="stats">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M4 20V10M10 20V4M16 20v-7M22 20H2"></path>
+      </svg>
+      <span>业绩</span>
+    </button>
+  </nav>
+
+  <button id="fab" class="fab" type="button" aria-label="新建项目">
+    <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>
+  </button>
+
+  <div id="detailLayer" class="layer hidden"></div>
+  <div id="formLayer" class="layer hidden"></div>
+  <div id="modalRoot"></div>
+  <div id="toast" class="toast" role="status"></div>
+
+  <script src="echarts.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
