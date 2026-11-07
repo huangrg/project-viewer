@@ -504,9 +504,10 @@ main {
 
 .stat-value {
   margin-top: 4px;
-  font-size: 16px;
+  font-size: clamp(13px, 3.6vw, 16px);
   font-weight: 700;
-  word-break: break-all;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 .stat-value.amount {
@@ -519,6 +520,43 @@ main {
 
 .stat-value.count {
   color: var(--text);
+}
+
+.stat-value.salary {
+  color: var(--text);
+}
+
+.stat-value.bonus {
+  color: var(--warn);
+}
+
+.stat-value.income {
+  color: var(--primary-strong);
+}
+
+.stat-card-total {
+  background: var(--primary-weak);
+  border-color: transparent;
+}
+
+.mini-tag {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 0 5px;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--muted);
+  background: var(--neutral-weak);
+  border-radius: 6px;
+  vertical-align: 1px;
+}
+
+.income-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: -2px 0 12px;
 }
 
 .card-title-row {
@@ -601,54 +639,105 @@ main {
 
 .year-total-item .value {
   margin-top: 4px;
-  font-size: 15px;
+  font-size: clamp(13px, 3.4vw, 15px);
   font-weight: 700;
-  word-break: break-all;
-}
-
-.table-wrap {
-  overflow-x: auto;
-}
-
-.year-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 13px;
   white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
-.year-table th {
-  padding: 6px;
-  font-weight: 500;
-  color: var(--muted);
-  text-align: right;
+.year-total-item .value.amount {
+  color: var(--primary-strong);
 }
 
-.year-table th:first-child {
-  text-align: left;
+.year-total-item .value.commission {
+  color: var(--success);
 }
 
-.year-table td {
-  padding: 9px 6px;
-  text-align: right;
-  border-top: 1px solid var(--border);
+.year-total-item .value.salary {
+  color: var(--text);
 }
 
-.year-table td:first-child {
-  text-align: left;
+.year-total-item .value.bonus {
+  color: var(--warn);
 }
 
-.year-table tr[data-action] {
+.year-total-item .value.income {
+  color: var(--primary-strong);
+}
+
+.year-month-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.year-month-row {
+  padding: 10px 0;
+  border-bottom: 1px dashed var(--border);
   cursor: pointer;
 }
 
-.year-table tr.active {
+.year-month-row.active {
+  margin: 0 -8px;
+  padding: 10px 8px;
   background: var(--primary-weak);
+  border-bottom-color: transparent;
+  border-radius: 10px;
 }
 
-.year-table tr.total td {
+.year-month-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.year-month-name {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.year-month-total {
+  font-size: 14px;
   font-weight: 700;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.year-month-sub {
+  margin-top: 3px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.year-month-note {
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.year-more {
+  width: 100%;
+  margin-top: 10px;
+}
+
+.year-month-summary {
+  margin-top: 12px;
+  padding-top: 12px;
   border-top: 1px solid var(--border);
+}
+
+.year-month-summary .year-month-head span:first-child {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.settings-divider {
+  margin: 14px 0;
+  border-top: 1px dashed var(--border);
 }
 
 /* ---------- Tab bar / FAB ---------- */
@@ -890,6 +979,10 @@ main {
   animation: mask-in 0.16s ease;
 }
 
+#confirmRoot .modal-mask {
+  z-index: 85;
+}
+
 .modal {
   width: 100%;
   max-width: 560px;
@@ -988,6 +1081,13 @@ main {
 .toast.show {
   opacity: 1;
   transform: translate(-50%, 0);
+}
+
+@media (max-width: 399px) {
+  .stat-cards,
+  .year-total-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
 }
 
 @media (min-width: 600px) {

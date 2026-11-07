@@ -41,14 +41,14 @@
   <main id="app">
     <section id="viewPending" class="view active">
       <div class="search-bar">
-        <input id="searchPending" type="search" aria-label="搜索待签约项目" placeholder="搜索项目名称、客户、备注" autocomplete="off">
+        <input id="searchPending" type="search" aria-label="搜索待签约项目" placeholder="搜索项目地址、客户、备注" autocomplete="off">
       </div>
       <div id="listPending" class="list"></div>
     </section>
 
     <section id="viewAll" class="view">
       <div class="search-bar">
-        <input id="searchAll" type="search" aria-label="搜索全部项目" placeholder="搜索项目名称、客户、备注" autocomplete="off">
+        <input id="searchAll" type="search" aria-label="搜索全部项目" placeholder="搜索项目地址、客户、备注" autocomplete="off">
       </div>
       <div class="chips" id="statusChips">
         <button class="chip active" type="button" data-status="all" aria-pressed="true">全部</button>
@@ -71,11 +71,12 @@
       </div>
 
       <div class="stat-cards" id="statCards"></div>
+      <div class="income-bar" id="incomeBar"></div>
 
       <section class="card chart-card">
         <div class="card-title-row">
           <h3>近 12 个月趋势</h3>
-          <span class="muted small">金额 / 佣金</span>
+          <span class="muted small">金额 / 佣金 / 总收入</span>
         </div>
         <div id="trendChart" class="trend-chart"></div>
       </section>
@@ -92,12 +93,10 @@
 
       <section class="card">
         <div class="card-title-row">
-          <h3 id="yearTableTitle">年度汇总</h3>
-          <span class="muted small">点击月份查看</span>
+          <h3 id="yearListTitle">年度各月收入</h3>
+          <span class="muted small" id="yearRecordedHint"></span>
         </div>
-        <div class="table-wrap">
-          <table class="year-table" id="yearTable"></table>
-        </div>
+        <div id="yearMonthList" class="year-month-list"></div>
       </section>
     </section>
   </main>
@@ -135,6 +134,7 @@
   <div id="detailLayer" class="layer hidden"></div>
   <div id="formLayer" class="layer hidden"></div>
   <div id="modalRoot"></div>
+  <div id="confirmRoot"></div>
   <div id="toast" class="toast" role="status"></div>
 
   <script src="echarts.min.js"></script>

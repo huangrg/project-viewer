@@ -1,10 +1,12 @@
 (function () {
   'use strict';
 
-  const STORE_KEY = 'projectViewer.v1';
+  const STORE_KEY = 'projectViewer.v2';
+  const LEGACY_STORE_KEY = 'projectViewer.v1';
   const THEME_KEY = 'projectViewer.theme';
   const BACKUP_KEY = 'projectViewer.backup';
-  const SCHEMA_VERSION = 1;
+  const SCHEMA_VERSION = 2;
+  const MAX_AMOUNT = 999999999;
   const CHANNELS = ['转介绍', '线上', '线下', '老客户', '其他'];
   const STATUS = {
     pending: { label: '待签约', cls: 'badge-pending' },
@@ -37,7 +39,8 @@
     detailId: null,
     editingNoteId: null,
     formOpen: false,
-    chart: null
+    chart: null,
+    yearExpandedYear: null
   };
 
   let data = loadData();
@@ -88,9 +91,23 @@
     return commissionOf(p.amount, p.commissionRate);
   }
 
+  const moneyCompactFmt = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 2 });
+
+  function roundMoney(value) {
+    const n = Number(value);
+    return isFinite(n) ? Math.round(n * 100) / 100 : 0;
+  }
+
+  function moneyCompact(value) {
+    return '¥' + moneyCompactFmt.format(roundMoney(value));
+  }
+
+  function pad2(n) {
+    return String(n).padStart(2, '0');
+  }
+
   function ymd(date) {
-    const pad = function (n) { return String(n).padStart(2, '0'); };
-    return date.getFullYear() + '-' + pad(date.getMonth() + 1) + '-' + pad(date.getDate());
+    return date.getFullYear() + '-' + pad2(date.getMonth() + 1) + '-' + pad2(date.getDate());
   }
 
   function todayISO() {
@@ -128,24 +145,22 @@
     if (!iso) return '';
     const d = new Date(iso);
     if (isNaN(d.getTime())) return String(iso).slice(0, 16).replace('T', ' ');
-    const pad = function (n) { return String(n).padStart(2, '0'); };
     return (
-      d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) +
-      ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes())
+      d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()) +
+      ' ' + pad2(d.getHours()) + ':' + pad2(d.getMinutes())
     );
   }
 
   function addMonths(ym, delta) {
     const parts = ym.split('-').map(Number);
     const d = new Date(parts[0], parts[1] - 1 + delta, 1);
-    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+    return d.getFullYear() + '-' + pad2(d.getMonth() + 1);
   }
 
   function stamp() {
     const d = new Date();
-    const pad = function (n) { return String(n).padStart(2, '0'); };
     return (
-      d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) + '-' + pad(d.getHours()) + pad(d.getMinutes())
+      d.getFullYear() + pad2(d.getMonth() + 1) + pad2(d.getDate()) + '-' + pad2(d.getHours()) + pad2(d.getMinutes())
     );
   }
 
@@ -214,34 +229,131 @@
     };
   }
 
-  function loadData() {
-    let raw = null;
+  function normalizeIncome(raw) {
+    const r = raw || {};
+    const base = toNumber(r.baseSalary);
+    const bonus = toNumber(r.bonus);
+    return {
+      baseSalary: base != null && base >= 0 && base <= MAX_AMOUNT ? roundMoney(base) : 0,
+      bonus: bonus != null && bonus >= 0 && bonus <= MAX_AMOUNT ? roundMoney(bonus) : 0,
+      note: String(r.note || '').trim().slice(0, 120)
+    };
+  }
+
+  function normalizeIncomes(raw) {
+    const out = {};
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+    Object.keys(raw).forEach(function (key) {
+      if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(key)) return;
+      const income = normalizeIncome(raw[key]);
+      if (income.baseSalary || income.bonus || income.note) out[key] = income;
+    });
+    return out;
+  }
+
+  function normalizeSettings(raw) {
+    const r = raw || {};
+    const base = toNumber(r.defaultBaseSalary);
+    return {
+      defaultBaseSalary: base != null && base > 0 && base <= MAX_AMOUNT ? roundMoney(base) : null
+    };
+  }
+
+  function parseStored(raw) {
+    if (!raw) return null;
     try {
-      raw = localStorage.getItem(STORE_KEY);
-      if (!raw) return { version: SCHEMA_VERSION, projects: [], corrupt: false };
       const parsed = JSON.parse(raw);
-      if (!parsed || !Array.isArray(parsed.projects)) throw new Error('bad shape');
-      const seen = {};
-      const projects = parsed.projects.map(normalizeProject).filter(function (p) {
-        if (!p.name) return false;
-        if (seen[p.id]) p.id = uid();
-        seen[p.id] = true;
-        return true;
-      });
-      return { version: SCHEMA_VERSION, projects: projects, corrupt: false };
+      return parsed && Array.isArray(parsed.projects) ? parsed : null;
     } catch (e) {
-      if (raw) {
-        try {
-          localStorage.setItem(BACKUP_KEY, JSON.stringify({ at: nowISO(), raw: raw }));
-        } catch (err) {}
-      }
-      return { version: SCHEMA_VERSION, projects: [], corrupt: true };
+      return null;
     }
+  }
+
+  function normalizeSnapshot(parsed) {
+    if (!parsed || !Array.isArray(parsed.projects)) return null;
+    const seen = {};
+    const projects = parsed.projects.map(normalizeProject).filter(function (p) {
+      if (!p.name) return false;
+      if (seen[p.id]) p.id = uid();
+      seen[p.id] = true;
+      return true;
+    });
+    return {
+      projects: projects,
+      incomes: normalizeIncomes(parsed.incomes),
+      settings: normalizeSettings(parsed.settings)
+    };
+  }
+
+  function loadData() {
+    const keys = [STORE_KEY, LEGACY_STORE_KEY];
+    let parsed = null;
+    let sourceKey = null;
+    let corruptRaw = null;
+    for (let i = 0; i < keys.length; i += 1) {
+      let raw = null;
+      try {
+        raw = localStorage.getItem(keys[i]);
+      } catch (e) {
+        raw = null;
+      }
+      if (!raw) continue;
+      const candidate = parseStored(raw);
+      if (candidate) {
+        parsed = candidate;
+        sourceKey = keys[i];
+        break;
+      }
+      if (!corruptRaw) corruptRaw = raw;
+    }
+    if (!parsed) {
+      if (corruptRaw) {
+        try {
+          localStorage.setItem(BACKUP_KEY, JSON.stringify({ at: nowISO(), raw: corruptRaw }));
+        } catch (e) {}
+      }
+      return {
+        version: SCHEMA_VERSION,
+        projects: [],
+        incomes: {},
+        settings: normalizeSettings(),
+        corrupt: !!corruptRaw
+      };
+    }
+    const snapshot = normalizeSnapshot(parsed);
+    if (sourceKey === LEGACY_STORE_KEY) {
+      try {
+        localStorage.setItem(
+          STORE_KEY,
+          JSON.stringify({
+            version: SCHEMA_VERSION,
+            projects: snapshot.projects,
+            incomes: snapshot.incomes,
+            settings: snapshot.settings
+          })
+        );
+      } catch (e) {}
+    }
+    return {
+      version: SCHEMA_VERSION,
+      projects: snapshot.projects,
+      incomes: snapshot.incomes,
+      settings: snapshot.settings,
+      corrupt: false
+    };
   }
 
   function saveData() {
     try {
-      localStorage.setItem(STORE_KEY, JSON.stringify({ version: SCHEMA_VERSION, projects: data.projects }));
+      localStorage.setItem(
+        STORE_KEY,
+        JSON.stringify({
+          version: SCHEMA_VERSION,
+          projects: data.projects,
+          incomes: data.incomes,
+          settings: data.settings
+        })
+      );
       return true;
     } catch (e) {
       toast('保存失败：浏览器存储空间不足');
@@ -254,30 +366,43 @@
   }
 
   function validateName(name, excludeId) {
-    if (!name) return '请填写项目名称';
+    if (!name) return '请填写项目地址';
     const lower = name.toLowerCase();
     const dup = data.projects.some(function (p) {
       return p.id !== excludeId && p.name.trim().toLowerCase() === lower;
     });
-    return dup ? '项目名称已存在' : '';
+    return dup ? '项目地址已存在' : '';
   }
 
   function parseAmount(value) {
     const s = String(value == null ? '' : value).trim();
     if (!s) return { error: '请填写签约金额' };
-    if (!/^\d+(\.\d{1,2})?$/.test(s)) return { error: '签约金额最多两位小数' };
     const n = Number(s);
-    if (!isFinite(n) || n <= 0) return { error: '签约金额必须大于 0' };
+    if (!isFinite(n)) return { error: '签约金额格式不正确' };
+    if (n <= 0) return { error: '签约金额必须大于 0' };
+    if (!/^\d+(\.\d{1,2})?$/.test(s)) return { error: '签约金额最多两位小数' };
     return { value: n };
   }
 
   function parseRate(value) {
     const s = String(value == null ? '' : value).trim();
     if (!s) return { error: '请填写佣金比例' };
-    if (!/^\d+(\.\d{1,2})?$/.test(s)) return { error: '佣金比例最多两位小数' };
     const n = Number(s);
-    if (!isFinite(n) || n < 0 || n > 100) return { error: '佣金比例需在 0–100 之间' };
+    if (!isFinite(n)) return { error: '佣金比例格式不正确' };
+    if (n < 0 || n > 100) return { error: '佣金比例需在 0–100 之间' };
+    if (!/^\d+(\.\d{1,2})?$/.test(s)) return { error: '佣金比例最多两位小数' };
     return { value: n };
+  }
+
+  function parseIncomeAmount(value, label) {
+    const s = String(value == null ? '' : value).trim();
+    if (!s) return { value: 0 };
+    const n = Number(s);
+    if (!isFinite(n)) return { error: label + '格式不正确' };
+    if (n < 0) return { error: label + '不能为负数' };
+    if (!/^\d+(\.\d{1,2})?$/.test(s)) return { error: label + '最多两位小数' };
+    if (n > MAX_AMOUNT) return { error: label + '金额过大' };
+    return { value: roundMoney(n) };
   }
 
   /* ---------- 通用 UI ---------- */
@@ -294,7 +419,8 @@
     const locked =
       !$('#detailLayer').classList.contains('hidden') ||
       !$('#formLayer').classList.contains('hidden') ||
-      !!$('#modalRoot').firstElementChild;
+      !!$('#modalRoot').firstElementChild ||
+      !!$('#confirmRoot').firstElementChild;
     document.body.classList.toggle('no-scroll', locked);
   }
 
@@ -316,20 +442,38 @@
     updateBodyLock();
   }
 
+  function closeConfirm() {
+    $('#confirmRoot').innerHTML = '';
+    updateBodyLock();
+  }
+
   function showConfirm(opts) {
-    openModal(
-      '<h3>' + esc(opts.title) + '</h3>' +
-      '<p class="modal-note">' + esc(opts.message) + '</p>' +
-      '<div class="modal-actions">' +
-        '<button class="btn btn-outline" type="button" data-mact="cancel">取消</button>' +
-        '<button class="btn ' + (opts.danger ? 'btn-danger' : 'btn-primary') + '" type="button" data-mact="ok">' + esc(opts.okText || '确定') + '</button>' +
-      '</div>'
-    );
-    $('#modalRoot').querySelector('[data-mact="cancel"]').addEventListener('click', closeModal);
-    $('#modalRoot').querySelector('[data-mact="ok"]').addEventListener('click', function () {
-      closeModal();
+    const root = $('#confirmRoot');
+    root.innerHTML =
+      '<div class="modal-mask confirm-mask" role="dialog" aria-modal="true">' +
+        '<div class="modal" tabindex="-1">' +
+          '<h3>' + esc(opts.title) + '</h3>' +
+          '<p class="modal-note">' + esc(opts.message) + '</p>' +
+          '<div class="modal-actions">' +
+            '<button class="btn btn-outline" type="button" data-mact="cancel">取消</button>' +
+            '<button class="btn ' + (opts.danger ? 'btn-danger' : 'btn-primary') + '" type="button" data-mact="ok">' + esc(opts.okText || '确定') + '</button>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+    const mask = root.querySelector('.modal-mask');
+    mask.addEventListener('click', function (e) {
+      if (e.target.classList.contains('modal-mask')) closeConfirm();
+    });
+    root.querySelector('[data-mact="cancel"]').addEventListener('click', closeConfirm);
+    root.querySelector('[data-mact="ok"]').addEventListener('click', function () {
+      closeConfirm();
       if (typeof opts.onOk === 'function') opts.onOk();
     });
+    updateBodyLock();
+    setTimeout(function () {
+      const target = root.querySelector('.modal');
+      if (target) target.focus();
+    }, 60);
   }
 
   function emptyBlock(title, text, withNew) {
@@ -533,86 +677,188 @@
       commissionTotal += commission(p);
       count += 1;
     });
+    const income = data.incomes[ym];
+    const baseSalary = income ? income.baseSalary : 0;
+    const bonus = income ? income.bonus : 0;
     return {
-      amount: Math.round(amount * 100) / 100,
-      commission: Math.round(commissionTotal * 100) / 100,
+      amount: roundMoney(amount),
+      commission: roundMoney(commissionTotal),
+      baseSalary: baseSalary,
+      bonus: bonus,
+      totalIncome: roundMoney(baseSalary + bonus + commissionTotal),
       count: count
     };
+  }
+
+  function yearStats(year) {
+    const yearKey = String(year);
+    let amount = 0;
+    let commissionTotal = 0;
+    let baseSalary = 0;
+    let bonus = 0;
+    let count = 0;
+    for (let i = 1; i <= 12; i += 1) {
+      const stats = monthStats(yearKey + '-' + pad2(i));
+      amount += stats.amount;
+      commissionTotal += stats.commission;
+      baseSalary += stats.baseSalary;
+      bonus += stats.bonus;
+      count += stats.count;
+    }
+    return {
+      amount: roundMoney(amount),
+      commission: roundMoney(commissionTotal),
+      baseSalary: roundMoney(baseSalary),
+      bonus: roundMoney(bonus),
+      totalIncome: roundMoney(baseSalary + bonus + commissionTotal),
+      count: count
+    };
+  }
+
+  function recordedMonthsInYear(year) {
+    const yearKey = String(year);
+    return Object.keys(data.incomes).filter(function (ym) {
+      return ym.slice(0, 4) === yearKey;
+    }).length;
+  }
+
+  function elapsedMonthsInYear(year) {
+    const now = new Date();
+    const currentYear = now.getFullYear();
+    if (year < currentYear) return 12;
+    if (year > currentYear) return 0;
+    return now.getMonth() + 1;
   }
 
   function renderStats() {
     const ym = state.statsMonth;
     const year = Number(ym.slice(0, 4));
     const month = Number(ym.slice(5, 7));
-    $('#monthLabel').textContent = year + '年' + month + '月';
+    const monthLabel = $('#monthLabel');
+    if (monthLabel) monthLabel.textContent = year + '年' + month + '月';
 
     const current = monthStats(ym);
-    $('#statCards').innerHTML =
-      '<div class="stat-card"><div class="stat-label">签约金额</div><div class="stat-value amount">' + money(current.amount) + '</div></div>' +
-      '<div class="stat-card"><div class="stat-label">佣金</div><div class="stat-value commission">' + money(current.commission) + '</div></div>' +
-      '<div class="stat-card"><div class="stat-label">签约项目</div><div class="stat-value count">' + current.count + ' 个</div></div>';
+    const income = data.incomes[ym];
+    const recorded = !!income;
+    const missingTag = '<span class="mini-tag">未录入</span>';
+    const statCards = $('#statCards');
+    if (statCards) {
+      statCards.innerHTML =
+        '<div class="stat-card stat-card-total"><div class="stat-label">本月收入</div><div class="stat-value income">' + money(current.totalIncome) + '</div></div>' +
+        '<div class="stat-card"><div class="stat-label">佣金</div><div class="stat-value commission">' + money(current.commission) + '</div></div>' +
+        '<div class="stat-card"><div class="stat-label">底薪' + (recorded ? '' : ' ' + missingTag) + '</div><div class="stat-value salary">' + money(current.baseSalary) + '</div></div>' +
+        '<div class="stat-card"><div class="stat-label">奖金' + (recorded ? '' : ' ' + missingTag) + '</div><div class="stat-value bonus">' + money(current.bonus) + '</div></div>' +
+        '<div class="stat-card"><div class="stat-label">签约金额</div><div class="stat-value amount">' + money(current.amount) + '</div></div>' +
+        '<div class="stat-card"><div class="stat-label">签约项目</div><div class="stat-value count">' + current.count + ' 个</div></div>';
+    }
+    const incomeBar = $('#incomeBar');
+    if (incomeBar) {
+      incomeBar.innerHTML =
+        '<span class="muted small">底薪 / 奖金按自然月记录</span>' +
+        '<button class="btn btn-sm ' + (recorded ? 'btn-outline' : 'btn-primary') + '" type="button" data-action="edit-income">' + (recorded ? '编辑本月收入' : '录入本月收入') + '</button>';
+    }
 
     const monthProjects = data.projects
       .filter(function (p) { return p.status === 'signed' && p.signDate && p.signDate.slice(0, 7) === ym; })
       .sort(function (a, b) { return String(b.signDate).localeCompare(String(a.signDate)); });
 
-    $('#monthListCount').textContent = monthProjects.length ? monthProjects.length + ' 个' : '';
-    $('#monthList').innerHTML = monthProjects.length
-      ? monthProjects.map(function (p) {
-          return (
-            '<div class="mini-row" role="button" tabindex="0" data-action="open" data-id="' + esc(p.id) + '">' +
-              '<div>' +
-                '<div class="mini-name">' + esc(p.name) + '</div>' +
-                '<div class="mini-sub">' + esc(p.clientName || '未填客户') + ' · ' + esc(p.signDate) + '</div>' +
-              '</div>' +
-              '<div class="mini-right">' + money(p.amount) + '<div class="muted">佣金 ' + money(commission(p)) + '</div></div>' +
-            '</div>'
-          );
-        }).join('')
-      : '<div class="mini-empty">该月没有签约项目</div>';
+    const monthListCount = $('#monthListCount');
+    if (monthListCount) monthListCount.textContent = monthProjects.length ? monthProjects.length + ' 个' : '';
+    const monthList = $('#monthList');
+    if (monthList) {
+      monthList.innerHTML = monthProjects.length
+        ? monthProjects.map(function (p) {
+            return (
+              '<div class="mini-row" role="button" tabindex="0" data-action="open" data-id="' + esc(p.id) + '">' +
+                '<div>' +
+                  '<div class="mini-name">' + esc(p.name) + '</div>' +
+                  '<div class="mini-sub">' + esc(p.clientName || '未填客户') + ' · ' + esc(p.signDate) + '</div>' +
+                '</div>' +
+                '<div class="mini-right">' + money(p.amount) + '<div class="muted">佣金 ' + money(commission(p)) + '</div></div>' +
+              '</div>'
+            );
+          }).join('')
+        : '<div class="mini-empty">该月没有签约项目</div>';
+    }
 
     const yearKey = String(year);
-    const yearProjects = data.projects.filter(function (p) {
-      return p.status === 'signed' && p.signDate && p.signDate.slice(0, 4) === yearKey;
-    });
-    let yearAmount = 0;
-    let yearCommission = 0;
-    yearProjects.forEach(function (p) {
-      yearAmount += Number(p.amount) || 0;
-      yearCommission += commission(p);
-    });
-    yearAmount = Math.round(yearAmount * 100) / 100;
-    yearCommission = Math.round(yearCommission * 100) / 100;
+    const yearly = yearStats(year);
+    const recordedMonths = recordedMonthsInYear(year);
+    const elapsedMonths = elapsedMonthsInYear(year);
 
-    $('#yearTotalCard').innerHTML =
-      '<div class="card-title-row"><h3>' + year + ' 年累计</h3><span class="muted small">' + yearProjects.length + ' 个签约项目</span></div>' +
-      '<div class="year-total-grid">' +
-        '<div class="year-total-item"><div class="label">签约金额</div><div class="value" style="color:var(--primary-strong)">' + money(yearAmount) + '</div></div>' +
-        '<div class="year-total-item"><div class="label">佣金</div><div class="value" style="color:var(--success)">' + money(yearCommission) + '</div></div>' +
-        '<div class="year-total-item"><div class="label">签约项目</div><div class="value">' + yearProjects.length + ' 个</div></div>' +
-      '</div>';
-
-    $('#yearTableTitle').textContent = year + ' 年各月汇总';
-    const rows = [];
-    for (let i = 1; i <= 12; i += 1) {
-      const key = year + '-' + String(i).padStart(2, '0');
-      const stats = monthStats(key);
-      rows.push(
-        '<tr data-action="jump-month" tabindex="0" data-month="' + key + '"' + (key === ym ? ' class="active"' : '') + '>' +
-          '<td>' + i + ' 月</td>' +
-          '<td>' + stats.count + '</td>' +
-          '<td>' + money(stats.amount) + '</td>' +
-          '<td>' + money(stats.commission) + '</td>' +
-        '</tr>'
-      );
+    const yearTotalCard = $('#yearTotalCard');
+    if (yearTotalCard) {
+      yearTotalCard.innerHTML =
+        '<div class="card-title-row"><h3>' + year + ' 年累计</h3><span class="muted small">' + yearly.count + ' 个签约项目</span></div>' +
+        '<div class="year-total-grid">' +
+          '<div class="year-total-item"><div class="label">签约金额</div><div class="value amount">' + money(yearly.amount) + '</div></div>' +
+          '<div class="year-total-item"><div class="label">佣金</div><div class="value commission">' + money(yearly.commission) + '</div></div>' +
+          '<div class="year-total-item"><div class="label">底薪</div><div class="value salary">' + money(yearly.baseSalary) + '</div></div>' +
+          '<div class="year-total-item"><div class="label">奖金</div><div class="value bonus">' + money(yearly.bonus) + '</div></div>' +
+          '<div class="year-total-item"><div class="label">总收入</div><div class="value income">' + money(yearly.totalIncome) + '</div></div>' +
+          '<div class="year-total-item"><div class="label">签约项目</div><div class="value">' + yearly.count + ' 个</div></div>' +
+        '</div>';
     }
-    rows.push(
-      '<tr class="total"><td>合计</td><td>' + yearProjects.length + '</td><td>' + money(yearAmount) + '</td><td>' + money(yearCommission) + '</td></tr>'
-    );
-    $('#yearTable').innerHTML =
-      '<thead><tr><th>月份</th><th>签约数</th><th>金额</th><th>佣金</th></tr></thead><tbody>' + rows.join('') + '</tbody>';
+
+    const yearListTitle = $('#yearListTitle');
+    if (yearListTitle) yearListTitle.textContent = year + ' 年各月收入';
+    const yearRecordedHint = $('#yearRecordedHint');
+    if (yearRecordedHint) {
+      const totalMonths = Math.max(elapsedMonths, recordedMonths);
+      yearRecordedHint.textContent = totalMonths
+        ? '已录入 ' + recordedMonths + '/' + totalMonths + ' 个月'
+        : '已录入 ' + recordedMonths + ' 个月';
+    }
+
+    const expanded = state.yearExpandedYear === yearKey;
+    const listRows = [];
+    let hiddenMonths = 0;
+    for (let i = 1; i <= 12; i += 1) {
+      const key = year + '-' + pad2(i);
+      const stats = monthStats(key);
+      const hasData = stats.totalIncome > 0 || stats.count > 0;
+      if (!expanded && !hasData && key !== ym && key !== currentMonth()) {
+        hiddenMonths += 1;
+        continue;
+      }
+      listRows.push(yearMonthRow(key, stats));
+    }
+    let monthListHtml = listRows.join('');
+    if (expanded) {
+      monthListHtml += '<button class="btn btn-sm btn-outline year-more" type="button" data-action="toggle-year">收起未录入月份</button>';
+    } else if (hiddenMonths > 0) {
+      monthListHtml += '<button class="btn btn-sm btn-outline year-more" type="button" data-action="toggle-year">展开其余 ' + hiddenMonths + ' 个月</button>';
+    }
+    monthListHtml +=
+      '<div class="year-month-summary">' +
+        '<div class="year-month-head"><span>全年合计</span><span class="year-month-total">' + money(yearly.totalIncome) + '</span></div>' +
+        '<div class="year-month-sub">底薪 ' + moneyCompact(yearly.baseSalary) + ' · 奖金 ' + moneyCompact(yearly.bonus) + ' · 佣金 ' + moneyCompact(yearly.commission) + '</div>' +
+      '</div>';
+    const yearMonthList = $('#yearMonthList');
+    if (yearMonthList) yearMonthList.innerHTML = monthListHtml;
 
     renderChart();
+  }
+
+  function yearMonthRow(ym, stats) {
+    const income = data.incomes[ym];
+    const note = income && income.note ? income.note : '';
+    const parts = [
+      '底薪 ' + moneyCompact(stats.baseSalary),
+      '奖金 ' + moneyCompact(stats.bonus),
+      '佣金 ' + moneyCompact(stats.commission),
+      '签约 ' + stats.count + ' 个'
+    ];
+    return (
+      '<div class="year-month-row' + (ym === state.statsMonth ? ' active' : '') + '" role="button" tabindex="0" data-action="jump-month" data-month="' + ym + '">' +
+        '<div class="year-month-head">' +
+          '<span class="year-month-name">' + Number(ym.slice(5, 7)) + ' 月' + (income ? '' : '<span class="mini-tag">未录入</span>') + '</span>' +
+          '<span class="year-month-total">' + money(stats.totalIncome) + '</span>' +
+        '</div>' +
+        '<div class="year-month-sub">' + parts.join(' · ') + '</div>' +
+        (note ? '<div class="year-month-note" title="' + esc(note) + '">' + esc(truncate(note, 30)) + '</div>' : '') +
+      '</div>'
+    );
   }
 
   function renderChart() {
@@ -623,8 +869,12 @@
 
     const months = [];
     for (let i = 11; i >= 0; i -= 1) months.push(addMonths(state.statsMonth, -i));
-    const amounts = months.map(function (mo) { return monthStats(mo).amount; });
-    const commissions = months.map(function (mo) { return monthStats(mo).commission; });
+    const statsList = months.map(monthStats);
+    const amounts = statsList.map(function (s) { return s.amount; });
+    const commissions = statsList.map(function (s) { return s.commission; });
+    const salaries = statsList.map(function (s) { return s.baseSalary; });
+    const bonuses = statsList.map(function (s) { return s.bonus; });
+    const incomes = statsList.map(function (s) { return s.totalIncome; });
     const labels = months.map(function (mo) { return Number(mo.slice(5, 7)) + '月'; });
 
     const cs = getComputedStyle(document.documentElement);
@@ -633,12 +883,13 @@
     const border = cs.getPropertyValue('--border').trim();
     const primary = cs.getPropertyValue('--primary').trim();
     const success = cs.getPropertyValue('--success').trim();
+    const warn = cs.getPropertyValue('--warn').trim();
 
     if (!state.chart) state.chart = echarts.init(el);
     state.chart.setOption(
       {
         backgroundColor: 'transparent',
-        color: [primary, success],
+        color: [primary, success, warn],
         grid: { left: 4, right: 8, top: 34, bottom: 2, containLabel: true },
         tooltip: {
           trigger: 'axis',
@@ -647,10 +898,16 @@
           textStyle: { color: '#fff', fontSize: 12 },
           formatter: function (params) {
             const idx = params && params[0] ? params[0].dataIndex : 0;
+            const monthIncome = data.incomes[months[idx]];
+            const note = monthIncome && monthIncome.note ? monthIncome.note : '';
             return (
               labels[idx] +
               '<br/>签约金额：' + money(amounts[idx]) +
-              '<br/>佣金：' + money(commissions[idx])
+              '<br/>佣金：' + money(commissions[idx]) +
+              '<br/>底薪：' + money(salaries[idx]) +
+              '<br/>奖金：' + money(bonuses[idx]) +
+              '<br/>总收入：' + money(incomes[idx]) +
+              (note ? '<br/>备注：' + esc(note) : '')
             );
           }
         },
@@ -659,6 +916,7 @@
           right: 0,
           itemWidth: 12,
           itemHeight: 8,
+          itemGap: 10,
           textStyle: { color: muted, fontSize: 11 }
         },
         xAxis: {
@@ -706,12 +964,115 @@
             symbolSize: 5,
             lineStyle: { color: success, width: 2 },
             itemStyle: { color: success }
+          },
+          {
+            name: '总收入',
+            type: 'line',
+            yAxisIndex: 1,
+            data: incomes,
+            smooth: true,
+            symbol: 'circle',
+            symbolSize: 5,
+            lineStyle: { color: warn, width: 2, type: 'dashed' },
+            itemStyle: { color: warn }
           }
         ]
       },
       true
     );
     state.chart.resize();
+  }
+
+  /* ---------- 月度收入 ---------- */
+
+  function openIncomeModal(ym) {
+    const income = data.incomes[ym];
+    const defaultBase = data.settings.defaultBaseSalary;
+    const baseValue = income ? income.baseSalary : defaultBase == null ? '' : defaultBase;
+    const bonusValue = income ? income.bonus : '';
+    const noteValue = income ? income.note : '';
+    const commissionValue = monthStats(ym).commission;
+    const year = ym.slice(0, 4);
+    const month = Number(ym.slice(5, 7));
+
+    openModal(
+      '<h3>' + year + '年' + month + '月收入</h3>' +
+      '<div class="form-row"><label for="mi-base">底薪（元）</label><input type="number" id="mi-base" step="0.01" min="0" inputmode="decimal" value="' + esc(baseValue) + '" placeholder="0"></div>' +
+      '<div class="form-row"><label for="mi-bonus">奖金（元）</label><input type="number" id="mi-bonus" step="0.01" min="0" inputmode="decimal" value="' + esc(bonusValue) + '" placeholder="0"></div>' +
+      '<div class="form-row"><label for="mi-note">备注</label><input id="mi-note" maxlength="120" placeholder="选填，例如：季度奖 / 项目奖" value="' + esc(noteValue) + '"></div>' +
+      '<div class="commission-preview"><span>本月合计</span><strong id="mi-total">' + money(commissionValue + (Number(baseValue) || 0) + (Number(bonusValue) || 0)) + '</strong></div>' +
+      '<div class="modal-actions">' +
+        (income ? '<button class="btn btn-danger-outline" type="button" data-mact="clear">清除</button>' : '') +
+        '<button class="btn btn-outline" type="button" data-mact="cancel">取消</button>' +
+        '<button class="btn btn-primary" type="button" data-mact="save">保存</button>' +
+      '</div>' +
+      '<p class="modal-note">合计 = 底薪 + 奖金 + 当月佣金（佣金按签约月份自动计算）。</p>'
+    );
+
+    const baseInput = $('#mi-base');
+    const bonusInput = $('#mi-bonus');
+    const updatePreview = function () {
+      const base = Number(baseInput.value) || 0;
+      const bonus = Number(bonusInput.value) || 0;
+      $('#mi-total').textContent = money(roundMoney(commissionValue + base + bonus));
+    };
+    baseInput.addEventListener('input', updatePreview);
+    bonusInput.addEventListener('input', updatePreview);
+    $('#modalRoot').querySelector('[data-mact="cancel"]').addEventListener('click', closeModal);
+    $('#modalRoot').querySelector('[data-mact="save"]').addEventListener('click', function () {
+      saveIncomeFromModal(ym);
+    });
+    const clearBtn = $('#modalRoot').querySelector('[data-mact="clear"]');
+    if (clearBtn) clearBtn.addEventListener('click', function () { clearIncome(ym); });
+  }
+
+  function saveIncomeFromModal(ym) {
+    const baseResult = parseIncomeAmount($('#mi-base').value, '底薪');
+    if (baseResult.error) {
+      toast(baseResult.error);
+      $('#mi-base').focus();
+      return;
+    }
+    const bonusResult = parseIncomeAmount($('#mi-bonus').value, '奖金');
+    if (bonusResult.error) {
+      toast(bonusResult.error);
+      $('#mi-bonus').focus();
+      return;
+    }
+    const note = $('#mi-note').value.trim();
+    const previous = data.incomes[ym];
+    if (!baseResult.value && !bonusResult.value && !note) delete data.incomes[ym];
+    else data.incomes[ym] = { baseSalary: baseResult.value, bonus: bonusResult.value, note: note };
+    if (!saveData()) {
+      if (previous) data.incomes[ym] = previous;
+      else delete data.incomes[ym];
+      return;
+    }
+    closeModal();
+    toast('本月收入已保存');
+    renderStats();
+  }
+
+  function clearIncome(ym) {
+    const year = ym.slice(0, 4);
+    const month = Number(ym.slice(5, 7));
+    showConfirm({
+      title: '清除本月收入',
+      message: '将清除 ' + year + '年' + month + '月 的底薪和奖金记录，当月佣金不受影响。',
+      okText: '清除',
+      danger: true,
+      onOk: function () {
+        const previous = data.incomes[ym];
+        delete data.incomes[ym];
+        if (!saveData()) {
+          if (previous) data.incomes[ym] = previous;
+          return;
+        }
+        closeModal();
+        toast('已清除本月收入');
+        renderStats();
+      }
+    });
   }
 
   /* ---------- 详情页 ---------- */
@@ -791,7 +1152,7 @@
       '</div>' +
       '<div class="page-body">' +
         '<section class="card">' +
-          '<div class="form-row"><label for="d-name">项目名称 *</label><input id="d-name" maxlength="80" value="' + esc(p.name) + '"></div>' +
+          '<div class="form-row"><label for="d-name">项目地址 *</label><input id="d-name" maxlength="80" value="' + esc(p.name) + '"></div>' +
           '<div class="form-row">' +
             '<label>状态</label>' +
             '<div class="status-line"><span class="badge ' + st.cls + '">' + st.label + '</span>' +
@@ -1188,7 +1549,7 @@
       '</div>' +
       '<div class="page-body">' +
         '<section class="card">' +
-          '<div class="form-row"><label for="f-name">项目名称 *</label><input id="f-name" maxlength="80" placeholder="例如：XX 品牌年度合作"></div>' +
+          '<div class="form-row"><label for="f-name">项目地址 *</label><input id="f-name" maxlength="80" placeholder="例如：XX 市 XX 区 XX 路 88 号"></div>' +
           '<div class="form-row"><label for="f-client">客户名称</label><input id="f-client" maxlength="80" placeholder="选填"></div>' +
           '<div class="form-row"><label for="f-contact">联系方式</label><input id="f-contact" maxlength="120" placeholder="选填"></div>' +
           '<div class="form-row"><label for="f-expected">预计签约时间</label><input type="date" id="f-expected"></div>' +
@@ -1251,10 +1612,50 @@
 
   /* ---------- 数据备份 ---------- */
 
+  function readBackup() {
+    let raw = null;
+    try {
+      raw = localStorage.getItem(BACKUP_KEY);
+    } catch (e) {
+      return null;
+    }
+    if (!raw) return null;
+    try {
+      const stored = JSON.parse(raw);
+      if (!stored || typeof stored !== 'object') return null;
+      let payload = stored.data;
+      if (!payload && typeof stored.raw === 'string') {
+        try {
+          payload = JSON.parse(stored.raw);
+        } catch (e) {
+          payload = null;
+        }
+      }
+      const snapshot = normalizeSnapshot(payload);
+      if (!snapshot) return null;
+      return { at: typeof stored.at === 'string' ? stored.at : '', snapshot: snapshot };
+    } catch (e) {
+      return null;
+    }
+  }
+
   function openDataModal() {
+    const backup = readBackup();
+    const backupSection = backup
+      ? '<div class="settings-divider"></div>' +
+        '<div class="form-hint">上次自动备份：' + esc(backup.at ? fmtDateTime(backup.at) : '时间未知') + '</div>' +
+        '<button class="btn btn-outline btn-block" type="button" data-mact="restore" style="margin-top:8px">恢复上次自动备份</button>'
+      : '';
     openModal(
-      '<h3>数据备份</h3>' +
+      '<h3>数据与设置</h3>' +
+      '<div class="form-row">' +
+        '<label for="set-default-base">默认底薪（元）</label>' +
+        '<input type="number" id="set-default-base" step="0.01" min="0" inputmode="decimal" placeholder="0" value="' + (data.settings.defaultBaseSalary == null ? '' : data.settings.defaultBaseSalary) + '">' +
+        '<div class="form-hint">仅用于录入月度收入时预填，不会自动计入未录入的月份。</div>' +
+      '</div>' +
+      '<div class="settings-divider"></div>' +
       '<p class="modal-note">数据只保存在当前浏览器（localStorage）。换设备或清理浏览器数据前，请先导出备份。</p>' +
+      backupSection +
       '<div style="display:flex;flex-direction:column;gap:10px;margin-top:14px">' +
         '<button class="btn btn-primary btn-block" type="button" data-mact="export">导出 JSON 备份</button>' +
         '<button class="btn btn-outline btn-block" type="button" data-mact="import">导入 JSON（覆盖当前数据）</button>' +
@@ -1265,12 +1666,75 @@
 
     $('#modalRoot').querySelector('[data-mact="cancel"]').addEventListener('click', closeModal);
 
+    const restoreBtn = $('#modalRoot').querySelector('[data-mact="restore"]');
+    if (restoreBtn) {
+      restoreBtn.addEventListener('click', function () {
+        const latest = readBackup();
+        if (!latest) {
+          toast('没有可恢复的备份');
+          return;
+        }
+        const snapshot = latest.snapshot;
+        if (
+          !snapshot.projects.length &&
+          !Object.keys(snapshot.incomes).length &&
+          snapshot.settings.defaultBaseSalary == null
+        ) {
+          toast('备份内容为空，无需恢复');
+          return;
+        }
+        showConfirm({
+          title: '恢复上次自动备份',
+          message:
+            '将恢复 ' + snapshot.projects.length + ' 个项目、' + Object.keys(snapshot.incomes).length +
+            ' 个月的收入记录，并覆盖当前数据。',
+          okText: '恢复',
+          danger: true,
+          onOk: function () {
+            const previous = data;
+            data = {
+              version: SCHEMA_VERSION,
+              projects: snapshot.projects,
+              incomes: snapshot.incomes,
+              settings: snapshot.settings
+            };
+            if (!saveData()) {
+              data = previous;
+              return;
+            }
+            closeModal();
+            renderAll();
+            toast('已恢复上次自动备份');
+          }
+        });
+      });
+    }
+
+    const defaultBaseInput = $('#set-default-base');
+    defaultBaseInput.addEventListener('change', function () {
+      const result = parseIncomeAmount(defaultBaseInput.value, '默认底薪');
+      if (result.error) {
+        toast(result.error);
+        defaultBaseInput.value = data.settings.defaultBaseSalary == null ? '' : data.settings.defaultBaseSalary;
+        return;
+      }
+      const previous = data.settings.defaultBaseSalary;
+      data.settings.defaultBaseSalary = result.value > 0 ? result.value : null;
+      if (!saveData()) {
+        data.settings.defaultBaseSalary = previous;
+        return;
+      }
+      toast(result.value > 0 ? '默认底薪已保存' : '默认底薪已清除');
+    });
+
     $('#modalRoot').querySelector('[data-mact="export"]').addEventListener('click', function () {
       const payload = {
         app: '项目管家',
         version: SCHEMA_VERSION,
         exportedAt: nowISO(),
-        projects: data.projects
+        projects: data.projects,
+        incomes: data.incomes,
+        settings: data.settings
       };
       const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
@@ -1323,10 +1787,31 @@
           toast('导入失败：备份中没有有效项目');
           return;
         }
+        const hasIncomesField = Object.prototype.hasOwnProperty.call(parsed, 'incomes');
+        const hasSettingsField = Object.prototype.hasOwnProperty.call(parsed, 'settings');
+        const incomes = hasIncomesField ? normalizeIncomes(parsed.incomes) : data.incomes;
+        const settings = hasSettingsField ? normalizeSettings(parsed.settings) : data.settings;
+        const currentIncomeMonths = Object.keys(data.incomes).length;
+        const incomingIncomeMonths = Object.keys(incomes).length;
+        const incomeText = hasIncomesField
+          ? '备份含 ' + incomingIncomeMonths + ' 个月收入记录，将替换当前 ' + currentIncomeMonths + ' 个月'
+          : '备份不含收入数据，当前 ' + currentIncomeMonths + ' 个月收入记录会保留';
+        let settingsText;
+        if (hasSettingsField) {
+          settingsText = settings.defaultBaseSalary == null
+            ? '默认底薪将被清除'
+            : '默认底薪将替换为 ' + money(settings.defaultBaseSalary);
+        } else {
+          settingsText = data.settings.defaultBaseSalary == null
+            ? '默认底薪保持未设置'
+            : '默认底薪保持 ' + money(data.settings.defaultBaseSalary);
+        }
         closeModal();
         showConfirm({
           title: '导入备份',
-          message: '将导入 ' + projects.length + ' 个项目，并覆盖当前 ' + data.projects.length + ' 个项目。当前数据会先自动暂存一份。',
+          message:
+            '将导入 ' + projects.length + ' 个项目，并覆盖当前 ' + data.projects.length + ' 个项目；' +
+            incomeText + '；' + settingsText + '。当前数据会先自动暂存一份，可在“数据与设置”中恢复。',
           okText: '导入并覆盖',
           danger: true,
           onOk: function () {
@@ -1334,7 +1819,7 @@
               localStorage.setItem(BACKUP_KEY, JSON.stringify({ at: nowISO(), data: data }));
             } catch (e) {}
             const previous = data;
-            data = { version: SCHEMA_VERSION, projects: projects };
+            data = { version: SCHEMA_VERSION, projects: projects, incomes: incomes, settings: settings };
             if (!saveData()) {
               data = previous;
               return;
@@ -1406,7 +1891,7 @@
   function renderAll() {
     renderPending();
     renderAllList();
-    renderStats();
+    if (state.view === 'stats') renderStats();
     const fab = $('#fab');
     fab.classList.toggle('hidden', state.view === 'stats');
   }
@@ -1426,10 +1911,19 @@
     } else if (action === 'new-project') {
       openNewForm();
     } else if (action === 'prev-month') {
+      const previousYear = state.statsMonth.slice(0, 4);
       state.statsMonth = addMonths(state.statsMonth, -1);
+      if (state.statsMonth.slice(0, 4) !== previousYear) state.yearExpandedYear = null;
       renderStats();
     } else if (action === 'next-month') {
+      const previousYear = state.statsMonth.slice(0, 4);
       state.statsMonth = addMonths(state.statsMonth, 1);
+      if (state.statsMonth.slice(0, 4) !== previousYear) state.yearExpandedYear = null;
+      renderStats();
+    } else if (action === 'edit-income') {
+      openIncomeModal(state.statsMonth);
+    } else if (action === 'toggle-year') {
+      state.yearExpandedYear = state.yearExpandedYear === state.statsMonth.slice(0, 4) ? null : state.statsMonth.slice(0, 4);
       renderStats();
     } else if (action === 'jump-month') {
       state.statsMonth = el.dataset.month;
@@ -1542,14 +2036,15 @@
 
   function onGlobalKeydown(e) {
     if (e.key === 'Escape') {
-      if ($('#modalRoot').firstElementChild) closeModal();
+      if ($('#confirmRoot').firstElementChild) closeConfirm();
+      else if ($('#modalRoot').firstElementChild) closeModal();
       else if (!$('#formLayer').classList.contains('hidden')) closeForm();
       else if (!$('#detailLayer').classList.contains('hidden')) closeDetail();
       return;
     }
     if (e.key === 'Enter' || e.key === ' ') {
       const el = e.target.closest('[data-action]');
-      if (el && el.tagName !== 'BUTTON' && (el.getAttribute('role') === 'button' || el.tagName === 'TR')) {
+      if (el && el.tagName !== 'BUTTON' && el.getAttribute('role') === 'button') {
         e.preventDefault();
         el.click();
       }
